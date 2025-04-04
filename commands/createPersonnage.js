@@ -1,9 +1,9 @@
 const createPersonnage = require("../commands/createPersonnage");
 
 module.exports = {
-  name: "createPersonnage",
+  name: "createpersonnage",
   execute(message, args) {
-    if (!args[0] === undefined) {
+    if (!args[0]) {
       message.reply("tu dois entrer un nom! Exemple: !createPersonnage Lucas");
     } else {
       const nom = args[0];

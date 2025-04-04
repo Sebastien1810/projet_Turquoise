@@ -21,6 +21,7 @@ for (const file of commandFiles) {
   const filePath = path.join(__dirname, "commands", file);
   //  Importer le fichier commande (chaque fichier doit exporter { name, execute })
   const command = require(filePath);
+  console.log(`Commande "${command.name}" chargée depuis ${file}`);
   commands.set(command.name, command.execute);
 }
 //Quand le client est prêt, run le code (uniquement une fois)

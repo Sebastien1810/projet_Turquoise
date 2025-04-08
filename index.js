@@ -1,4 +1,6 @@
 require(`dotenv`).config();
+const Personnage = require("./models/Personnage");
+const allActions = require("./actions/actions.js/actions");
 const mongoose = require("mongoose");
 const { Client, Events, GatewayIntentBits } = require("discord.js");
 const token = process.env.DISCORD_TOKEN; //j'ai utiliser un.env donc je le recup depuis process.env
@@ -58,3 +60,43 @@ mongoose
 
 //on se connecte avec le token client
 client.login(token);
+
+async function eventPersonnage(client) {
+  const personnages = await Personnage.find();
+  for (const perso of personnages) {
+    if (!perso.stats) continue;
+    const index = Math.floor(Math.random() * allActions.length);
+    const action = allActions[index];
+    console.log(`${perso.nom} fait : ${action.texte}`);
+    for (const clé in action.effets) {
+      perso.stats[clé] += action.effets[clé];
+    }
+    await perso.save(); // enregistre les modifs dans ma base de données
+
+    const channel = client.channels.cache.find(
+      (c) => c.name === "safeplace_city" && c.isTextBased()
+    );
+    if (!channel) return console.error("Salon safeplace_city introuvable.");
+
+    let effetsMsg = Object.entries(action.effets)
+      .map(([cle, valeur]) => {
+        const emoji =
+          cle === "bonheur"
+            ? "💖"
+            : cle === "energie"
+            ? "⚡"
+            : cle === "sport"
+            ? "💪"
+            : cle === "intelligence"
+            ? "🧠"
+            : "";
+        return `${emoji} ${cle} : ${valeur > 0 ? "+" : ""}${valeur}`;
+      })
+      .join(" | ");
+
+    channel.send(`📝 **${perso.nom}** ${action.texte}\n${effetsMsg}`);
+  }
+
+  console.log("Une action sera appliquée à chaque personnage ici.");
+}
+setInterval(() => eventPersonnage(client), 60000);

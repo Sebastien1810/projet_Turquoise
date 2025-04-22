@@ -1,102 +1,140 @@
-require(`dotenv`).config();
-const Personnage = require("./models/Personnage");
-const allActions = require("./actions/actions.js/actions");
-const mongoose = require("mongoose");
-const { Client, Events, GatewayIntentBits } = require("discord.js");
-const token = process.env.DISCORD_TOKEN; //j'ai utiliser un.env donc je le recup depuis process.env
+require("dotenv").config();
 const fs = require("fs");
 const path = require("path");
-const commands = new Map();
+const mongoose = require("mongoose");
+const { Client, Events, GatewayIntentBits } = require("discord.js");
+const Personnage = require("./models/Personnage");
+const { allActions, allInteractions } = require("./actions/actions");
 
+const token = process.env.DISCORD_TOKEN; // récupère le token depuis .env
+const mongoUri = process.env.MONGO_URI; // URI MongoDB
+
+// Crée une instance du client Discord avec les intents nécessaires
 const client = new Client({
   intents: [
-    GatewayIntentBits.GuildMessages, //permets l'acces géneral au serveur
-    GatewayIntentBits.MessageContent, // recevoir les messages
-    GatewayIntentBits.Guilds, // lire le texte des messages
+    GatewayIntentBits.Guilds, // accès aux guilds
+    GatewayIntentBits.GuildMessages, // recevoir les messages
+    GatewayIntentBits.MessageContent, // lire le contenu des messages
   ],
-}); //Creer une nouvelle instance
-// (Les intents sont des autorisations que je donne au bot pour lui dire "voici les types d’événements que je veux recevoir depuis Discord)
+});
 
-const commandFiles = fs.readdirSync(path.join(__dirname, "commands"));
-// ↑ __dirname = dossier actuel (là où se trouve index.js)
-// ↑ path.join(...) = construit un chemin complet vers le dossier "commands"
-// ↑ fs.readdirSync(...) = lit tous les fichiers de ce dossier (ex: ["createPersonnage.js", "stats.js"])
-
-for (const file of commandFiles) {
-  const filePath = path.join(__dirname, "commands", file);
-  //  Importer le fichier commande (chaque fichier doit exporter { name, execute })
-  const command = require(filePath);
-  console.log(`Commande "${command.name}" chargée depuis ${file}`);
-  commands.set(command.name, command.execute);
+// Chargement dynamique des commandes depuis le dossier "commands"
+const commands = new Map();
+const commandsPath = path.join(__dirname, "commands");
+if (fs.existsSync(commandsPath)) {
+  fs.readdirSync(commandsPath).forEach((file) => {
+    if (file.endsWith(".js")) {
+      const command = require(path.join(commandsPath, file));
+      if (command.name && typeof command.execute === "function") {
+        commands.set(command.name, command.execute);
+        console.log(`Commande "${command.name}" chargée depuis ${file}`);
+      }
+    }
+  });
 }
 
-//Quand le client est prêt, run le code (uniquement une fois)
-client.once(Events.ClientReady, (readyClient) => {
-  console.log(`Ready!Logged in as ${readyClient.user.tag}`);
-});
-
-client.on("messageCreate", (message) => {
-  if (message.author.bot) return; // On ignore les messages des bots
-  if (!message.content.startsWith("!")) return; // On ignore les messages sans "!"
-
-  const args = message.content.slice(1).trim().split(/ +/); // ["createPersonnage", "Lucas"]
-  const commandName = args.shift().toLowerCase(); // "createPersonnage"
-  const command = commands.get(commandName);
-
-  if (command) {
-    command(message, args); // Exécute la commande
-  } else {
-    message.reply("Commande inconnue.");
-  }
-});
-
+// Connexion à MongoDB
 mongoose
-  .connect(process.env.MONGO_URI, {
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
-  })
+  .connect(mongoUri, { useNewUrlParser: true, useUnifiedTopology: true })
   .then(() => console.log("🟢 Connecté à MongoDB"))
   .catch((err) => console.error("❌ Erreur MongoDB :", err));
 
-//on se connecte avec le token client
-client.login(token);
-
-async function eventPersonnage(client) {
+// Lorsqu'on est prêt, on initialise la planification des actions
+client.once(Events.ClientReady, async () => {
+  console.log(`Ready! Logged in as ${client.user.tag}`);
+  // Planifie une action pour chaque personnage existant
   const personnages = await Personnage.find();
-  for (const perso of personnages) {
-    if (!perso.stats) continue;
-    const index = Math.floor(Math.random() * allActions.length);
-    const action = allActions[index];
-    console.log(`${perso.nom} fait : ${action.texte}`);
-    for (const clé in action.effets) {
-      perso.stats[clé] += action.effets[clé];
-    }
-    await perso.save(); // enregistre les modifs dans ma base de données
+  personnages.forEach((p) => scheduleActionFor(p));
+});
 
-    const channel = client.channels.cache.find(
-      (c) => c.name === "safeplace_city" && c.isTextBased()
-    );
-    if (!channel) return console.error("Salon safeplace_city introuvable.");
+// Gestion des messages et exécution des commandes
+client.on("messageCreate", async (message) => {
+  if (message.author.bot || !message.content.startsWith("!")) return; // ignore les bots et les messages sans préfixe
 
-    let effetsMsg = Object.entries(action.effets)
-      .map(([cle, valeur]) => {
-        const emoji =
-          cle === "bonheur"
-            ? "💖"
-            : cle === "energie"
-            ? "⚡"
-            : cle === "sport"
-            ? "💪"
-            : cle === "intelligence"
-            ? "🧠"
-            : "";
-        return `${emoji} ${cle} : ${valeur > 0 ? "+" : ""}${valeur}`;
-      })
-      .join(" | ");
+  const args = message.content.slice(1).trim().split(/\s+/); // sépare la commande et les arguments
+  const commandName = args.shift().toLowerCase();
+  const command = commands.get(commandName);
 
-    channel.send(`📝 **${perso.nom}** ${action.texte}\n${effetsMsg}`);
+  if (!command) {
+    return message.reply("Commande inconnue.");
   }
 
-  console.log("Une action sera appliquée à chaque personnage ici.");
+  try {
+    await command(message, args); // exécute la commande
+  } catch (error) {
+    console.error(
+      `Erreur lors de l'exécution de la commande ${commandName}:`,
+      error
+    );
+    message.reply(
+      "Une erreur est survenue lors de l'exécution de la commande."
+    );
+  }
+});
+
+// Fonction récursive pour planifier et exécuter des actions ou interactions
+async function scheduleActionFor(perso) {
+  if (!perso.stats) return;
+  const delay = Math.floor(Math.random() * 7200000); // délai aléatoire jusqu'à 2h
+
+  setTimeout(async () => {
+    try {
+      const personnages = await Personnage.find();
+      const others = personnages.filter((p) => !p._id.equals(perso._id)); // exclut soi-même
+      if (!others.length) return scheduleActionFor(perso);
+
+      let texte, effets;
+      if (Math.random() < 0.2 && allInteractions.length) {
+        // cas d'une interaction (20% de chance)
+        const interaction =
+          allInteractions[Math.floor(Math.random() * allInteractions.length)];
+        const target = others[Math.floor(Math.random() * others.length)];
+        texte = interaction.texte.replace("{cible}", target.nom);
+        effets = interaction.effets;
+      } else {
+        // cas d'une action simple
+        const action =
+          allActions[Math.floor(Math.random() * allActions.length)];
+        texte = action.texte;
+        effets = action.effets;
+      }
+
+      // application des effets sur les stats
+      for (const [key, val] of Object.entries(effets)) {
+        perso.stats[key] = (perso.stats[key] || 0) + val;
+      }
+      await perso.save(); // enregistre dans la base
+
+      // envoi du message dans le salon dédié
+      const channel = client.channels.cache.find(
+        (c) => c.name === "safeplace_city" && c.isTextBased()
+      );
+      if (!channel) {
+        console.error("Salon safeplace_city introuvable.");
+      } else {
+        const emojiMap = {
+          bonheur: "💖",
+          energie: "⚡",
+          sport: "💪",
+          intelligence: "🧠",
+        };
+        const effetsMsg = Object.entries(effets)
+          .map(
+            ([k, v]) => `${emojiMap[k] || ""} ${k} : ${v > 0 ? "+" : ""}${v}`
+          )
+          .join(" | ");
+        channel.send(`📝 **${perso.nom}** ${texte}\n${effetsMsg}`);
+      }
+    } catch (err) {
+      console.error(
+        "Erreur lors du traitement de l'action du personnage:",
+        err
+      );
+    } finally {
+      // replanifie l'action suivante
+      scheduleActionFor(perso);
+    }
+  }, delay);
 }
-setInterval(() => eventPersonnage(client), 60000);
+
+client.login(token);

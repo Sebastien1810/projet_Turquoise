@@ -5,6 +5,7 @@ const actionRepos = require("./actions_repos");
 const actionSociales = require("./actions_sociales");
 const actionIntellectuelles = require("./actions_intellectuelles");
 const actionDomestiques = require("./actions_domestiques");
+const actions_interactions = require("./actions_interactions");
 
 const allActions = [
   ...actionSportives,
@@ -15,5 +16,5 @@ const allActions = [
   ...actionIntellectuelles,
   ...actionDomestiques,
 ];
-
-module.exports = allActions;
+const allInteractions = [...actions_interactions];
+module.exports = { allActions, allInteractions };
